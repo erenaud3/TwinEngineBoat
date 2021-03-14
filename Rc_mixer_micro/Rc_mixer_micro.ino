@@ -25,65 +25,105 @@ const unsigned long RIGHT_MOTOR_MID = 1500;
 const unsigned long RIGHT_MOTOR_FORWARD = 1800;
 const unsigned long RIGHT_MOTOR_BACKWARD = 1200;
 
-volatile unsigned long pulse_time_left_motor = 1500;
-char bufferLeftMotor[20];
+const int THROTTLE_ARRAY_SIZE = 10;
 
-volatile unsigned long pulse_time_right_motor = 1500;
-char bufferRightMotor[20];
+volatile unsigned long pulse_time_left_motor = LEFT_MOTOR_MID;
+int t_throttle_left_motor[THROTTLE_ARRAY_SIZE];
+int index_throttle_left_motor = 0;
+int throttle_left_motor = LEFT_MOTOR_MID;
 
-const unsigned long REFRESH_RATE = 100; // in ms
+volatile unsigned long pulse_time_right_motor = LEFT_MOTOR_MID;
+int t_throttle_right_motor[THROTTLE_ARRAY_SIZE];
+int index_throttle_right_motor = 0;
+int throttle_right_motor = LEFT_MOTOR_MID;
+
+const unsigned long REFRESH_TIME= 10; // in ms
+const unsigned long SERIAL_TIME = 200; // in ms
+const unsigned long SERIAL_TIME_CYCLE = SERIAL_TIME/REFRESH_TIME;
+int cycle_counter = 0;
 unsigned long _now;
-unsigned long last_loop;
+unsigned long last_output_refresh_time;
+unsigned long last_input_read_time;
 
 float yaw_modifier = 0;
 float left_yaw_modifier = 0;
 float right_yaw_modifier = 0;
 
-volatile unsigned long rising_edge_throttle = 0;
-volatile unsigned long pulse_time_throttle = 0;
-char bufferThrottle[20];
+volatile unsigned long v_rising_edge_throttle = 0;
+volatile unsigned long v_pulse_time_throttle = 0;
+unsigned long pulse_time_throttle;
 void calcSignalThrottle() 
 {
     //if the pin has gone HIGH, record the microseconds since the Arduino started up 
     if(digitalRead(CHANNEL_THROTTLE_PIN) == HIGH) 
     { 
-        rising_edge_throttle = micros();
+        v_rising_edge_throttle = micros();
     } 
     //otherwise, the pin has gone LOW 
     else
     { 
         //only worry about this if the timer has actually started
-        if(rising_edge_throttle != 0)
+        if(v_rising_edge_throttle != 0)
         { 
             //record the pulse time
-            pulse_time_throttle = (micros() - rising_edge_throttle);
-            //Serial.println("Trottle : " + pulse_time_throttle);
+            v_pulse_time_throttle = (micros() - v_rising_edge_throttle);
+            //Serial.println("Trottle : " + v_pulse_time_throttle);
         }
     } 
 }
 
-volatile unsigned long rising_edge_yaw = 0;
-volatile unsigned long pulse_time_yaw = 0;
-char bufferYaw[20];
+volatile unsigned long v_rising_edge_yaw = 0;
+volatile unsigned long v_pulse_time_yaw = 0;
+unsigned long pulse_time_yaw;
 
 void calcSignalYaw() 
 {
     //if the pin has gone HIGH, record the microseconds since the Arduino started up 
     if(digitalRead(CHANNEL_YAW_PIN) == HIGH) 
     { 
-        rising_edge_yaw = micros();
+        v_rising_edge_yaw = micros();
     } 
     //otherwise, the pin has gone LOW 
     else
     { 
         //only worry about this if the timer has actually started
-        if(rising_edge_yaw != 0)
+        if(v_rising_edge_yaw != 0)
         { 
             //record the pulse time
-            pulse_time_yaw = (micros() - rising_edge_yaw);
+            v_pulse_time_yaw = (micros() - v_rising_edge_yaw);
         }
     }
 } 
+
+void init_throttle_array(int *array, int init_value)
+{
+  int i;
+  for(i=0; i<THROTTLE_ARRAY_SIZE; i++)
+  {
+    array[i] = init_value;
+  }
+}
+
+void update_throttle_array(int *array, int value, int * current_index)
+{
+  if (*current_index >= THROTTLE_ARRAY_SIZE)
+  {
+    *current_index = 0;
+  }
+  array[*current_index] = value;
+  *current_index = *current_index + 1;
+}
+
+int get_mean_throttle_value(int *array) 
+{
+  int i, mean = 0;
+  for(i=0; i<THROTTLE_ARRAY_SIZE; i++)
+  {
+    mean += array[i];
+  }
+  mean = round((float)mean/THROTTLE_ARRAY_SIZE);
+  return(mean);
+}
 
 Servo left_motor;
 Servo right_motor;
@@ -91,7 +131,11 @@ Servo right_motor;
 void setup() {
 
   _now = 0;
-  last_loop = 0;
+  last_output_refresh_time = 0;
+  last_input_read_time = 0;
+
+  init_throttle_array(t_throttle_left_motor, LEFT_MOTOR_MID);
+  init_throttle_array(t_throttle_right_motor, RIGHT_MOTOR_MID);
   
   // put your setup code here, to run once:
   Serial.begin(115200);
@@ -152,13 +196,16 @@ void loop() {
   _now = millis();
 
   // write value (outside the refresh func, otherwise we have strange behavuior)
-  left_motor.writeMicroseconds((int)pulse_time_left_motor);
-  right_motor.writeMicroseconds((int)pulse_time_right_motor);
+  left_motor.writeMicroseconds((int)throttle_left_motor);
+  right_motor.writeMicroseconds((int)throttle_right_motor);
 
-  if (_now - last_loop > REFRESH_RATE)
+  if (_now - last_output_refresh_time > REFRESH_TIME)
   {
     // disable interrupts to avoid werid behavior
     noInterrupts();
+    pulse_time_yaw = v_pulse_time_yaw;
+    pulse_time_throttle = v_pulse_time_throttle;
+    interrupts();
 
     // WATCH SECURITY : go to no throttle and no yaw when no input
     if (pulse_time_throttle == 0 || pulse_time_yaw == 0)
@@ -194,31 +241,48 @@ void loop() {
     // calculate transformation
     pulse_time_left_motor = compute_mixed_output(LEFT_MOTOR_FORWARD, LEFT_MOTOR_BACKWARD, LEFT_MOTOR_MID, pulse_time_throttle, left_yaw_modifier);
     pulse_time_right_motor = compute_mixed_output(RIGHT_MOTOR_FORWARD, RIGHT_MOTOR_BACKWARD, RIGHT_MOTOR_MID, pulse_time_throttle, right_yaw_modifier);
-   
-    
-    Serial.print("Yaw : ");
-    Serial.println(pulse_time_yaw);
-    Serial.print("Trottle : ");
-    Serial.println(pulse_time_throttle);
-    Serial.print("LEFT throttle : ");
-    Serial.println(pulse_time_left_motor);
-    Serial.print("RIGHT throttle : ");
-    Serial.println(pulse_time_right_motor);
-    Serial.print("left_yaw_modifier : ");
-    Serial.println(left_yaw_modifier);
-    Serial.print("right_yaw_modifier : ");
-    Serial.println(right_yaw_modifier);
-    Serial.println("---------------");
-    
 
-    
-    last_loop = _now;
+    // add new value to arrays
+    update_throttle_array(t_throttle_left_motor, (int) pulse_time_left_motor, &index_throttle_left_motor);
+    update_throttle_array(t_throttle_right_motor, (int) pulse_time_right_motor, &index_throttle_right_motor);
 
-    // reset pulse_time measuration 
-    rising_edge_throttle = 0;
-    rising_edge_yaw = 0;
-    pulse_time_throttle = 0;
-    pulse_time_yaw = 0;
-    interrupts();
+    // update mean value
+    throttle_left_motor = get_mean_throttle_value(t_throttle_left_motor);
+    throttle_right_motor = get_mean_throttle_value(t_throttle_right_motor);
+
+    // if time to print logs:
+    if (cycle_counter == SERIAL_TIME_CYCLE - 1)
+    {
+      Serial.print("Yaw : ");
+      Serial.println(pulse_time_yaw);
+      Serial.print("Trottle : ");
+      Serial.println(pulse_time_throttle);
+      Serial.print("LEFT throttle : ");
+      Serial.println(throttle_left_motor);
+      Serial.print("RIGHT throttle : ");
+      Serial.println(throttle_right_motor);
+      Serial.print("left_yaw_modifier : ");
+      Serial.println(left_yaw_modifier);
+      Serial.print("right_yaw_modifier : ");
+      Serial.println(right_yaw_modifier);
+      Serial.println("---------------");
+
+
+      // SAFETY once in a while, we reset pulse_time measurement (in case we have no signal)
+      noInterrupts();
+      // reset pulse_time measuration 
+      v_rising_edge_throttle = 0;
+      v_rising_edge_yaw = 0;
+      v_pulse_time_throttle = 0;
+      v_pulse_time_yaw = 0;
+      interrupts();
+
+      cycle_counter = 0;
+    }
+    else
+    {
+      cycle_counter++;
+    }
+    last_output_refresh_time = _now;
   }
 }

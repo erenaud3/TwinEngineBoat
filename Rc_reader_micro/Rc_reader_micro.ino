@@ -12,6 +12,12 @@ TODO :
 const int CHANNEL_YAW_PIN = 2;
 const int CHANNEL_THROTTLE_PIN = 3;
 
+const int CHANNEL_LEFT_MOTOR = 10;
+const int CHANNEL_RIGHT_MOTOR = 9;
+
+Servo left_motor;
+Servo right_motor;
+
 volatile unsigned long rising_edge_yaw = 0;
 volatile unsigned long pulse_time_yaw = 0;
 char bufferYaw[20];
@@ -73,18 +79,25 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(CHANNEL_YAW_PIN), calcSignalYaw, CHANGE);
   attachInterrupt(digitalPinToInterrupt(CHANNEL_THROTTLE_PIN), calcSignalThrottle, CHANGE);
 
+  left_motor.attach(CHANNEL_LEFT_MOTOR);
+  right_motor.attach(CHANNEL_RIGHT_MOTOR);
+
   Serial.println("Ready");
 }
 
 unsigned long last_blink = 0, _now;
 const unsigned long BLINK_DURATION = 250;
-const unsigned long BLINK_PERIOD = 750;
+const unsigned long BLINK_PERIOD = 10;
 
 byte LED_STATE = LOW;
 
 void loop() {
 
   _now = millis();
+
+   left_motor.writeMicroseconds((int)1500);
+   right_motor.writeMicroseconds((int)1500);
+  
 /*
   // read input pwm from throttle and yaw
   pulse_time_throttle = pulseIn(CHANNEL_THROTTLE_PIN, HIGH);
